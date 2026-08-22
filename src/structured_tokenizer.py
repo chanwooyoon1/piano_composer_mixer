@@ -1,4 +1,4 @@
-"""Structured MIDI v3: bar-level chord token + position/pitch/duration events."""
+"""Structured MIDI: bar-level chord token + position/pitch/duration events."""
 
 from collections import defaultdict
 import numpy as np
