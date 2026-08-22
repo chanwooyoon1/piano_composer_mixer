@@ -7,6 +7,14 @@ import torch.nn.functional as F
 LEARNING_RATE = 3e-4
 EPOCHS = 20
 
+if not torch.cuda.is_available():
+    raise RuntimeError(
+        "Training requires a CUDA-capable GPU."
+    )
+
+device = torch.device("cuda")
+model = model.to(device)
+
 optimizer = torch.optim.AdamW(
     model.parameters(),
     lr=LEARNING_RATE,
