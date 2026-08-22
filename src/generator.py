@@ -26,7 +26,7 @@ PROJECT_DIR = Path(__file__).resolve().parents[1]
 CHECKPOINT_PATH = (
     PROJECT_DIR
     / "models"
-    / "last_structured_v3_piano_transformer_augmented.pt"
+    / "last_structured_piano_transformer_augmented.pt"
 )
 
 OUTPUT_DIR = PROJECT_DIR / "generated"
