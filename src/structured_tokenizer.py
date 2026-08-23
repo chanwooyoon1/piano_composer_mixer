@@ -1,22 +1,28 @@
 """Structured MIDI v3: bar-level chord token + position/pitch/duration events."""
 
+# Import grouped event storage, numerical operations, and MIDI processing.
 from collections import defaultdict
 
 import numpy as np
 import pretty_midi
 
 
+# Define the rhythmic grid and output tempo.
 STEPS_PER_BEAT = 4
 BEATS_PER_BAR = 4
 STEPS_PER_BAR = STEPS_PER_BEAT * BEATS_PER_BAR
 OUTPUT_TEMPO = 120
 
+
+# Define the supported piano range and token resolution.
 MIN_PITCH = 21
 MAX_PITCH = 108
 VELOCITY_BINS = 32
 MAX_DURATION_STEPS = 64
 NUM_CHORD_TOKENS = 25  # 12 major, 12 minor, NO_CHORD
 
+
+# Assign vocabulary positions to each token category.
 PAD_TOKEN = 0
 BOS_TOKEN = 1
 EOS_TOKEN = 2
@@ -29,27 +35,37 @@ DURATION_START = PITCH_START + (MAX_PITCH - MIN_PITCH + 1)
 VOCAB_SIZE = DURATION_START + MAX_DURATION_STEPS
 
 
+# Convert a MIDI velocity value into one of the velocity bins.
 def velocity_to_bin(velocity):
     return min(VELOCITY_BINS - 1, (int(velocity) - 1) * VELOCITY_BINS // 127)
 
 
+# Convert a velocity bin back into a valid MIDI velocity value.
 def bin_to_velocity(velocity_bin):
     value = int((int(velocity_bin) + 0.5) * 127 / VELOCITY_BINS)
     return max(1, min(127, value))
 
 
+# Obtain beat locations and extend them through the end of the performance.
 def _beat_times(midi):
     beats = np.asarray(midi.get_beats(), dtype=np.float64)
     end_time = max((n.end for i in midi.instruments for n in i.notes), default=0.0)
+
+    # Create a regular beat grid when the MIDI file has insufficient beat data.
     if len(beats) < 2:
         interval = 60.0 / OUTPUT_TEMPO
         beats = np.arange(0.0, end_time + 2 * interval, interval)
+
+    # Extend the final observed beat interval through the final note.
     interval = beats[-1] - beats[-2]
+
     while beats[-1] <= end_time:
         beats = np.append(beats, beats[-1] + interval)
+
     return beats
 
 
+# Quantize a time value to the nearest rhythmic grid step.
 def _time_to_grid_step(time_seconds, beats):
     index = int(np.searchsorted(beats, time_seconds, side="right") - 1)
     index = max(0, min(index, len(beats) - 2))
@@ -58,23 +74,32 @@ def _time_to_grid_step(time_seconds, beats):
     return index * STEPS_PER_BEAT + within
 
 
+# Estimate one major, minor, or empty chord label for a bar.
 def _chord_id(notes, bar_index):
     """Infer the most likely major/minor triad from weighted pitch classes."""
+
+    # Define the rhythmic boundaries of the selected bar.
     start = bar_index * STEPS_PER_BAR
     end = start + STEPS_PER_BAR
+
+    # Accumulate weighted activity for all twelve pitch classes.
     histogram = np.zeros(12, dtype=np.float64)
 
     for pitch, velocity, note_start, note_end in notes:
         overlap = max(0, min(note_end, end) - max(note_start, start))
+
         if overlap:
             histogram[pitch % 12] += overlap * (0.5 + velocity / 127)
 
+    # Return the empty chord category when the bar contains no notes.
     if histogram.sum() == 0:
         return 24  # NO_CHORD
 
+    # Track the strongest candidate chord.
     best_score = -float("inf")
     best_id = 24
 
+    # Evaluate every root with both major and minor quality.
     for root in range(12):
         for quality, intervals in enumerate(((0, 4, 7), (0, 3, 7))):
             members = [(root + interval) % 12 for interval in intervals]
@@ -82,6 +107,7 @@ def _chord_id(notes, bar_index):
             outside = histogram.sum() - inside
             # Root has a small bonus; non-chord notes receive a mild penalty.
             score = inside + 0.25 * histogram[root] - 0.20 * outside
+
             if score > best_score:
                 best_score = score
                 best_id = root + quality * 12
@@ -89,69 +115,106 @@ def _chord_id(notes, bar_index):
     return best_id
 
 
+# Convert one MIDI performance into a structured V3 token sequence.
 def midi_to_tokens(midi_path):
+    # Load the MIDI file and create its rhythmic grid.
     midi = pretty_midi.PrettyMIDI(str(midi_path))
     beats = _beat_times(midi)
+
+    # Group note events by their quantized start step.
     events_by_step = defaultdict(list)
     note_spans = []
     max_end_step = 0
 
+    # Collect notes from all non drum instruments.
     for instrument in midi.instruments:
         if instrument.is_drum:
             continue
+
         for note in instrument.notes:
+            # Ignore notes outside the supported piano range.
             if not MIN_PITCH <= note.pitch <= MAX_PITCH:
                 continue
+
+            # Quantize note boundaries and preserve a minimum duration.
             start = _time_to_grid_step(note.start, beats)
             end = _time_to_grid_step(note.end, beats)
             end = max(start + 1, end)
             duration = min(MAX_DURATION_STEPS, end - start)
+
+            # Store note events for token creation and chord estimation.
             events_by_step[start].append((note.pitch, velocity_to_bin(note.velocity), duration))
             note_spans.append((note.pitch, note.velocity, start, end))
             max_end_step = max(max_end_step, end)
 
+    # Begin the sequence with the beginning token.
     last_bar = max_end_step // STEPS_PER_BAR
     tokens = [BOS_TOKEN]
 
+    # Encode each bar with its chord and note events.
     for bar in range(last_bar + 1):
         tokens.append(BAR_TOKEN)
         tokens.append(CHORD_START + _chord_id(note_spans, bar))
 
         bar_start = bar * STEPS_PER_BAR
         bar_end = bar_start + STEPS_PER_BAR
+
+        # Encode every occupied position inside the current bar.
         for step in sorted(s for s in events_by_step if bar_start <= s < bar_end):
             tokens.append(POSITION_START + (step - bar_start))
+
+            # Encode velocity, pitch, and duration for every note at the position.
             for pitch, velocity_bin, duration in sorted(events_by_step[step]):
                 tokens.extend((VELOCITY_START + velocity_bin, PITCH_START + pitch - MIN_PITCH, DURATION_START + duration - 1))
 
+    # Mark the end of the token sequence.
     tokens.append(EOS_TOKEN)
     return np.asarray(tokens, dtype=np.int32)
 
 
+# Convert a structured V3 token sequence back into a MIDI performance.
 def tokens_to_midi(tokens):
+    # Create an empty MIDI object and piano instrument.
     midi = pretty_midi.PrettyMIDI(initial_tempo=OUTPUT_TEMPO)
     piano = pretty_midi.Instrument(program=0, name="Acoustic Grand Piano")
+
+    # Calculate the duration represented by one rhythmic grid step.
     seconds_per_step = 60.0 / OUTPUT_TEMPO / STEPS_PER_BEAT
+
+    # Track the current bar, position, velocity, and unfinished pitch.
     current_bar = -1
     current_position = 0
     current_velocity = 64
     pending_pitch = None
 
+    # Interpret tokens in sequence order.
     for raw in tokens:
         token = int(raw)
+
+        # Start a new bar and reset temporary pitch state.
         if token == BAR_TOKEN:
             current_bar += 1
             current_position = 0
             pending_pitch = None
+
+        # Treat chord tokens as structural information only.
         elif CHORD_START <= token < POSITION_START:
             pending_pitch = None  # chord is conditioning metadata, not an audible note
+
+        # Update the current rhythmic position.
         elif POSITION_START <= token < VELOCITY_START:
             current_position = token - POSITION_START
             pending_pitch = None
+
+        # Decode the current MIDI velocity.
         elif VELOCITY_START <= token < PITCH_START:
             current_velocity = bin_to_velocity(token - VELOCITY_START)
+
+        # Store the pitch until its duration token is read.
         elif PITCH_START <= token < DURATION_START:
             pending_pitch = MIN_PITCH + token - PITCH_START
+
+        # Complete and append a note after reading its duration.
         elif DURATION_START <= token < VOCAB_SIZE and pending_pitch is not None:
             duration = token - DURATION_START + 1
             start = (current_bar * STEPS_PER_BAR + current_position) * seconds_per_step
@@ -159,5 +222,6 @@ def tokens_to_midi(tokens):
             piano.notes.append(pretty_midi.Note(velocity=current_velocity, pitch=pending_pitch, start=start, end=end))
             pending_pitch = None
 
+    # Add the piano performance to the MIDI object.
     midi.instruments.append(piano)
     return midi
