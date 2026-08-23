@@ -1,3 +1,10 @@
+"""
+Generates structured V3 piano music with a trained composer conditioned
+Transformer. It supports weighted composer embedding mixtures, constrained
+token sampling, MIDI conversion, and WAV rendering through FluidSynth.
+"""
+
+# Import path, file system, process, array, MIDI, and PyTorch utilities.
 from pathlib import Path
 import shutil
 import subprocess
@@ -9,62 +16,78 @@ import torch
 from music_model import load_music_model
 
 
-# =========================================================
 # Paths
-# =========================================================
 
 # Repository root
 PROJECT_DIR = Path(__file__).resolve().parents[1]
 
+
+# Locate the trained model checkpoint.
 CHECKPOINT_PATH = (
     PROJECT_DIR
     / "models"
     / "best_structured_v3_piano_transformer_augmented.pt"
 )
 
+
+# Store generated token, MIDI, and WAV files in this directory.
 OUTPUT_DIR = PROJECT_DIR / "generated"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+
+# Locate the SoundFont used to render piano audio.
 SOUNDFONT_PATH = (
     PROJECT_DIR
     / "soundfonts"
     / "MuseScore_General.sf3"
 )
 
+
+# Find the FluidSynth executable installed on the system.
 FLUIDSYNTH_PATH = shutil.which("fluidsynth")
 
+# Use the default Homebrew path when automatic detection fails.
 if FLUIDSYNTH_PATH is None:
     FLUIDSYNTH_PATH = "/opt/homebrew/bin/fluidsynth"
+
+
 # =========================================================
 # V3 token definitions
 # =========================================================
 
+# Define special sequence tokens.
 PAD_TOKEN = 0
 BOS_TOKEN = 1
 EOS_TOKEN = 2
 BAR_TOKEN = 3
 
+
+# Define chord token positions in the vocabulary.
 CHORD_START = 4
 NUM_CHORD_TOKENS = 25
 
+
+# Define position, velocity, pitch, and duration token ranges.
 POSITION_START = CHORD_START + NUM_CHORD_TOKENS
 VELOCITY_START = POSITION_START + 16
 PITCH_START = VELOCITY_START + 32
 DURATION_START = PITCH_START + 88
 
+
+# Define the complete vocabulary and maximum model context.
 VOCAB_SIZE = 229
 CONTEXT_LENGTH = 4096
 
 
-# =========================================================
 # MIDI conversion
-# =========================================================
 
+# Convert a generated structured V3 token sequence into a MIDI object.
 def tokens_to_midi_v3(tokens, bpm=120):
     midi = pretty_midi.PrettyMIDI(
         initial_tempo=float(bpm)
     )
 
+    # Create one acoustic piano instrument.
     piano = pretty_midi.Instrument(
         program=0,
         name="Acoustic Grand Piano",
@@ -73,14 +96,17 @@ def tokens_to_midi_v3(tokens, bpm=120):
     # 16分音符単位
     seconds_per_step = 60.0 / bpm / 4.0
 
+    # Track the current musical location and note attributes.
     current_bar = -1
     current_position = 0
     current_velocity = 64
     pending_pitch = None
 
+    # Interpret tokens in their generated order.
     for raw_token in tokens:
         token = int(raw_token)
 
+        # Begin a new bar and reset temporary note state.
         if token == BAR_TOKEN:
             current_bar += 1
             current_position = 0
@@ -91,10 +117,12 @@ def tokens_to_midi_v3(tokens, bpm=120):
             # MIDIノートには直接変換しない。
             pass
 
+        # Update the current position inside the bar.
         elif POSITION_START <= token < VELOCITY_START:
             current_position = token - POSITION_START
             pending_pitch = None
 
+        # Convert a velocity token into a MIDI velocity value.
         elif VELOCITY_START <= token < PITCH_START:
             velocity_bin = token - VELOCITY_START
 
@@ -106,11 +134,13 @@ def tokens_to_midi_v3(tokens, bpm=120):
                 ),
             )
 
+        # Store a pitch until the following duration token is received.
         elif PITCH_START <= token < DURATION_START:
             pending_pitch = (
                 21 + token - PITCH_START
             )
 
+        # Complete the pending note after reading its duration.
         elif DURATION_START <= token < VOCAB_SIZE:
             if pending_pitch is not None and current_bar >= 0:
                 duration_steps = (
@@ -142,10 +172,12 @@ def tokens_to_midi_v3(tokens, bpm=120):
 
                 pending_pitch = None
 
+    # Add the completed piano track to the MIDI object.
     midi.instruments.append(piano)
     return midi
 
 
+# Render a MIDI file as WAV audio with FluidSynth.
 def midi_to_wav(
     midi_path,
     wav_path,
@@ -159,6 +191,7 @@ def midi_to_wav(
     soundfont_path = Path(soundfont_path)
     fluidsynth_path = Path(fluidsynth_path)
 
+    # Confirm that all required input files exist.
     if not midi_path.is_file():
         raise FileNotFoundError(
             f"MIDI file was not found: {midi_path}"
@@ -174,11 +207,13 @@ def midi_to_wav(
             f"FluidSynth was not found: {fluidsynth_path}"
         )
 
+    # Create the output directory when needed.
     wav_path.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
+    # Build the FluidSynth rendering command.
     command = [
         str(fluidsynth_path),
         "-ni",
@@ -192,6 +227,7 @@ def midi_to_wav(
         str(midi_path),
     ]
 
+    # Run FluidSynth and report its error output if rendering fails.
     try:
         subprocess.run(
             command,
@@ -210,6 +246,7 @@ def midi_to_wav(
             f"FluidSynth failed: {error_message}"
         ) from error
 
+    # Confirm that FluidSynth created the requested WAV file.
     if not wav_path.is_file():
         raise RuntimeError(
             f"WAV file was not created: {wav_path}"
@@ -218,10 +255,9 @@ def midi_to_wav(
     return wav_path
 
 
-# =========================================================
 # Model helpers
-# =========================================================
 
+# Mask every vocabulary item except the currently allowed tokens.
 def restrict_to(logits, allowed_tokens):
     mask = torch.zeros_like(
         logits,
@@ -236,12 +272,14 @@ def restrict_to(logits, allowed_tokens):
     )
 
 
+# Run the model with a weighted mixture of learned composer embeddings.
 def forward_with_composer_mix(
     model,
     token_ids,
     composer_mix,
     composer_map,
 ):
+    # Calculate the sum used to normalize composer weights.
     total_weight = sum(
         max(0.0, float(weight))
         for weight in composer_mix.values()
@@ -252,12 +290,14 @@ def forward_with_composer_mix(
             "The total composer weight must be greater than zero."
         )
 
+    # Begin with an empty composer conditioning vector.
     mixed_embedding = torch.zeros(
         model.composer_embedding.embedding_dim,
         device=token_ids.device,
         dtype=model.token_embedding.weight.dtype,
     )
 
+    # Combine the selected composer embeddings according to their weights.
     for composer_name, raw_weight in composer_mix.items():
         weight = max(0.0, float(raw_weight))
 
@@ -277,8 +317,10 @@ def forward_with_composer_mix(
             * model.composer_embedding.weight[composer_id]
         )
 
+    # Embed the generated token context.
     x = model.token_embedding(token_ids)
 
+    # Expand the mixed composer vector across the batch and sequence.
     mixed_embedding = mixed_embedding[
         None,
         None,
@@ -289,13 +331,16 @@ def forward_with_composer_mix(
         x + mixed_embedding
     )
 
+    # Process the conditioned sequence through every Transformer block.
     for block in model.blocks:
         x = block(x)
 
+    # Produce vocabulary predictions for every sequence position.
     x = model.norm(x)
     return model.lm_head(x)
 
 
+# Sample one token from the highest scoring valid candidates.
 def sample_token(logits, top_k):
     finite_count = int(
         torch.isfinite(logits).sum().item()
@@ -306,6 +351,7 @@ def sample_token(logits, top_k):
             "No valid token is available."
         )
 
+    # Prevent the requested candidate count from exceeding valid tokens.
     actual_top_k = min(
         int(top_k),
         finite_count,
@@ -332,12 +378,12 @@ def sample_token(logits, top_k):
     )
 
 
-# =========================================================
 # Generator
-# =========================================================
 
+# Load the model and generate structured piano token sequences.
 class PianoMusicGenerator:
     def __init__(self, checkpoint_path=CHECKPOINT_PATH):
+        # Load model parameters, checkpoint metadata, and execution device.
         self.model, self.checkpoint, self.device = (
             load_music_model(checkpoint_path)
         )
@@ -368,16 +414,20 @@ class PianoMusicGenerator:
         seed=1234,
         render_wav=True,
     ):
+        # Reject temperature values that cannot produce valid probabilities.
         if temperature <= 0:
             raise ValueError(
                 "Temperature must be greater than zero."
             )
 
+        # Set the sampling seed for repeatable generation.
         torch.manual_seed(seed)
 
+        # Begin every generated sequence with the beginning token.
         tokens = [BOS_TOKEN]
         recent_pitches = []
 
+        # Initialize the structured generation state.
         pending_pitch_midi = None
         state = "expect_bar"
         bars_generated = 0
@@ -387,8 +437,10 @@ class PianoMusicGenerator:
         print("Composer mix:", composer_mix)
         print("Generating on:", self.device)
 
+        # Generate tokens without storing gradients.
         with torch.inference_mode():
             for generation_step in range(max_new_tokens):
+                # Limit the model input to its maximum context length.
                 context = torch.tensor(
                     [
                         tokens[
@@ -407,11 +459,13 @@ class PianoMusicGenerator:
                     self.composer_map,
                 )[0, -1]
 
+                # Adjust the prediction distribution with temperature.
                 logits = (
                     logits.float()
                     / float(temperature)
                 )
 
+                # Require a bar token at the beginning of each bar.
                 if state == "expect_bar":
                     allowed = torch.tensor(
                         [BAR_TOKEN],
@@ -424,6 +478,7 @@ class PianoMusicGenerator:
                         allowed,
                     )
 
+                # Require one chord token after a bar token.
                 elif state == "expect_chord":
                     allowed = torch.arange(
                         CHORD_START,
@@ -436,6 +491,7 @@ class PianoMusicGenerator:
                         allowed,
                     )
 
+                # Require a position token after the chord.
                 elif state == "expect_position":
                     allowed = torch.arange(
                         POSITION_START,
@@ -448,6 +504,7 @@ class PianoMusicGenerator:
                         allowed,
                     )
 
+                # Require a velocity token before a pitch.
                 elif state == "expect_velocity":
                     allowed = torch.arange(
                         VELOCITY_START,
@@ -460,6 +517,7 @@ class PianoMusicGenerator:
                         allowed,
                     )
 
+                # Require a pitch token after velocity.
                 elif state == "expect_pitch":
                     allowed = torch.arange(
                         PITCH_START,
@@ -482,6 +540,7 @@ class PianoMusicGenerator:
 
                         logits[token_id] -= 0.65
 
+                # Require a duration token after pitch.
                 elif state == "expect_duration":
                     # 通常音は最大16ステップ
                     max_duration = 16
@@ -504,6 +563,7 @@ class PianoMusicGenerator:
                         allowed,
                     )
 
+                # Allow another event or finish after a complete note event.
                 elif state == "after_event":
                     if bars_generated >= max_bars:
                         allowed = torch.tensor(
@@ -538,6 +598,7 @@ class PianoMusicGenerator:
                         allowed,
                     )
 
+                # Sample one token from the currently valid choices.
                 next_token = sample_token(
                     logits,
                     top_k,
@@ -545,6 +606,7 @@ class PianoMusicGenerator:
 
                 tokens.append(next_token)
 
+                # Update the generation state after accepting the sampled token.
                 if next_token == BAR_TOKEN:
                     bars_generated += 1
                     state = "expect_chord"
@@ -602,19 +664,23 @@ class PianoMusicGenerator:
                 elif next_token == EOS_TOKEN:
                     break
 
+                # Report progress during longer generation runs.
                 if (generation_step + 1) % 50 == 0:
                     print(
                         "Generated tokens:",
                         generation_step + 1,
                     )
 
+        # Convert the generated Python list into a compact array.
         tokens_array = np.asarray(
             tokens,
             dtype=np.int32,
         )
 
+        # Remove directory components from the requested output name.
         safe_name = Path(output_name).stem
 
+        # Define output paths for tokens, MIDI, and WAV audio.
         token_path = (
             OUTPUT_DIR
             / f"{safe_name}_tokens.npy"
@@ -630,11 +696,13 @@ class PianoMusicGenerator:
             / f"{safe_name}.wav"
         )
 
+        # Save the generated token sequence.
         np.save(
             token_path,
             tokens_array,
         )
 
+        # Convert generated tokens into a MIDI performance.
         midi = tokens_to_midi_v3(
             tokens_array,
             bpm=bpm,
@@ -644,6 +712,7 @@ class PianoMusicGenerator:
             str(midi_path)
         )
 
+        # Optionally render the MIDI performance as WAV audio.
         if render_wav:
             print("Rendering WAV with FluidSynth...")
 
@@ -655,6 +724,7 @@ class PianoMusicGenerator:
         else:
             wav_path = None
 
+        # Display every generated output path.
         print("Generated bars:", bars_generated)
         print("Generated tokens:", len(tokens_array))
         print("Token file:", token_path)
@@ -663,6 +733,7 @@ class PianoMusicGenerator:
         if wav_path is not None:
             print("WAV file:", wav_path)
 
+        # Return generated data and output locations to the caller.
         return {
             "tokens": tokens_array,
             "token_path": token_path,
@@ -672,10 +743,9 @@ class PianoMusicGenerator:
         }
 
 
-# =========================================================
 # Local test
-# =========================================================
 
+# Generate one example using the configured composer proportions.
 if __name__ == "__main__":
     generator = PianoMusicGenerator()
 
