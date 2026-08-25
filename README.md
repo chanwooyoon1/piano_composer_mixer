@@ -141,3 +141,7 @@ The biggest lesson from this project was that the representation of music matter
 Generating raw audio required the model to learn both musical structure and sound reconstruction. Using structured MIDI tokens allowed the Transformer to focus more directly on pitch, rhythm, harmony, and duration.
 
 This project also gave me experience with dataset preparation, custom tokenization, Transformer implementation, GPU training, sampling constraints, data augmentation, and model deployment on Apple Silicon.
+
+## AI Assistance
+
+AI tools were used for debugging support, code review, documentation editing, and exploring implementation alternatives. I designed the project, prepared the dataset, implemented and trained the model, evaluated the generated results, and made the final technical decisions.
