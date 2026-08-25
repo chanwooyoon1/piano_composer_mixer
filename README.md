@@ -181,13 +181,6 @@ FluidSynth is required to convert generated MIDI files into WAV audio.
 brew install fluid-synth
 ```
 
-Verify the installation:
-
-```bash
-which fluidsynth
-fluidsynth --version
-```
-
 ### 5. Download the model checkpoint
 
 Download the pretrained checkpoint from the repository's Releases page:
@@ -204,18 +197,6 @@ The checkpoint filename must exactly match the filename above. If the downloaded
 
 ```text
 best_structured_v3_piano_transformer_augmented.pt
-```
-
-The project should now contain:
-
-```text
-piano_composer_mixer/
-├── models/
-│   └── best_structured_v3_piano_transformer_augmented.pt
-├── src/
-│   ├── music_generator.py
-│   └── music_model.py
-└── README.md
 ```
 
 ### 6. Add a SoundFont
@@ -236,10 +217,10 @@ piano_composer_mixer/
 │   └── best_structured_v3_piano_transformer_augmented.pt
 ├── soundfonts/
 │   └── MuseScore_General.sf3
-├── src/
-│   ├── music_generator.py
-│   └── music_model.py
-└── README.md
+└── src/
+    ├── music_generator.py
+    └── music_model.py
+
 ```
 
 If a different SoundFont is used, update `SOUNDFONT_PATH` in `src/music_generator.py`.
@@ -284,20 +265,6 @@ composer_mix={
 }
 ```
 
-The values are normalized automatically, but using a total of 100 makes the mixture easier to understand.
-
-The other generation settings can also be changed:
-
-```text
-output_name     Name used for the generated files
-max_bars        Maximum number of musical bars
-max_new_tokens  Maximum number of generated tokens
-temperature     Randomness of generation
-top_k           Number of candidate tokens considered at each step
-bpm             Tempo of the generated MIDI
-seed            Random seed used for generation
-```
-
 ### 8. Generate music
 
 Make sure the virtual environment is active:
@@ -327,7 +294,6 @@ The MIDI file can be opened in GarageBand, Logic Pro, MuseScore, or another MIDI
 
 ### Generate MIDI without WAV rendering
 
-If FluidSynth or a SoundFont is not available, add the following argument to `generator.generate`:
 
 ```python
 render_wav=False
@@ -357,48 +323,6 @@ generator.generate(
 ```
 
 This creates the MIDI and token files without creating a WAV file.
-
-### Troubleshooting
-
-If the following error appears:
-
-```text
-ModuleNotFoundError: No module named 'torch'
-```
-
-activate the virtual environment and install PyTorch using the same Python interpreter:
-
-```bash
-source .venv/bin/activate
-python -m pip install torch
-python src/music_generator.py
-```
-
-Confirm that the correct Python installation is being used:
-
-```bash
-which python
-python -c "import torch; print(torch.__version__)"
-```
-
-If FluidSynth is not found, run:
-
-```bash
-brew install fluid-synth
-which fluidsynth
-```
-
-If the checkpoint is not found, confirm that it is located at:
-
-```text
-models/best_structured_v3_piano_transformer_augmented.pt
-```
-
-If the SoundFont is not found, confirm that it is located at:
-
-```text
-soundfonts/MuseScore_General.sf3
-```
 
 ## AI Assistance
 
