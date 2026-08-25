@@ -144,4 +144,4 @@ This project also gave me experience with dataset preparation, custom tokenizati
 
 ## AI Assistance
 
-AI tools were used for debugging support, code review, documentation editing, and exploring implementation alternatives. I designed the project, prepared the dataset, implemented and trained the model, evaluated the generated results, and made the final technical decisions.
+AI tools were used for debugging support, code review, and documentation editing. I designed the project, prepared the dataset, implemented and trained the model, evaluated the generated results, and made the final technical decisions.
