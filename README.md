@@ -134,13 +134,271 @@ python src/prepare_dataset.py \
     --create-zip
 ```
 
-## What I learned
+## Generate Music Locally
 
-The biggest lesson from this project was that the representation of music matters as much as the model architecture.
+The pretrained model can generate MIDI and WAV files on a local computer. These instructions are written for macOS.
 
-Generating raw audio required the model to learn both musical structure and sound reconstruction. Using structured MIDI tokens allowed the Transformer to focus more directly on pitch, rhythm, harmony, and duration.
+Run this project from Terminal rather than IDLE. IDLE may use a different Python installation that does not contain PyTorch.
 
-This project also gave me experience with dataset preparation, custom tokenization, Transformer implementation, GPU training, sampling constraints, data augmentation, and model deployment on Apple Silicon.
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/chanwooyoon1/piano_composer_mixer.git
+cd piano_composer_mixer
+```
+
+### 2. Create a Python environment
+
+Python 3.11 is recommended.
+
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+When the environment is active, the Terminal prompt should begin with `(.venv)`.
+
+### 3. Install the required Python packages
+
+```bash
+python -m pip install torch numpy pretty_midi
+```
+
+Verify that PyTorch is installed:
+
+```bash
+python -c "import torch; print(torch.__version__); print(torch.backends.mps.is_available())"
+```
+
+On an Apple Silicon Mac, the second value should normally be `True`. The generator automatically uses MPS when it is available and otherwise uses the CPU.
+
+### 4. Install FluidSynth
+
+FluidSynth is required to convert generated MIDI files into WAV audio.
+
+```bash
+brew install fluid-synth
+```
+
+Verify the installation:
+
+```bash
+which fluidsynth
+fluidsynth --version
+```
+
+### 5. Download the model checkpoint
+
+Download the pretrained checkpoint from the repository's Releases page:
+
+https://github.com/chanwooyoon1/piano_composer_mixer/releases
+
+Create a `models` directory in the repository and place the downloaded checkpoint at:
+
+```text
+models/best_structured_v3_piano_transformer_augmented.pt
+```
+
+The checkpoint filename must exactly match the filename above. If the downloaded file has a different name, rename it to:
+
+```text
+best_structured_v3_piano_transformer_augmented.pt
+```
+
+The project should now contain:
+
+```text
+piano_composer_mixer/
+├── models/
+│   └── best_structured_v3_piano_transformer_augmented.pt
+├── src/
+│   ├── music_generator.py
+│   └── music_model.py
+└── README.md
+```
+
+### 6. Add a SoundFont
+
+A SoundFont is required to render the generated MIDI as WAV audio.
+
+Create a `soundfonts` directory and place a compatible SoundFont at:
+
+```text
+soundfonts/MuseScore_General.sf3
+```
+
+The project should now contain:
+
+```text
+piano_composer_mixer/
+├── models/
+│   └── best_structured_v3_piano_transformer_augmented.pt
+├── soundfonts/
+│   └── MuseScore_General.sf3
+├── src/
+│   ├── music_generator.py
+│   └── music_model.py
+└── README.md
+```
+
+If a different SoundFont is used, update `SOUNDFONT_PATH` in `src/music_generator.py`.
+
+### 7. Choose the composer mixture
+
+Open `src/music_generator.py` and find the following section near the bottom:
+
+```python
+if __name__ == "__main__":
+    generator = PianoMusicGenerator()
+
+    generator.generate(
+        composer_mix={
+            "Frédéric Chopin": 0,
+            "Franz Schubert": 0,
+            "Ludwig van Beethoven": 0,
+            "Johann Sebastian Bach": 40,
+            "Franz Liszt": 60,
+            "OTHER": 0,
+        },
+        output_name="bach40_liszt60",
+        max_bars=16,
+        max_new_tokens=3500,
+        temperature=0.90,
+        top_k=24,
+        bpm=120,
+        seed=1234,
+    )
+```
+
+Change the composer values to generate a different mixture. For example, the following settings use 40 percent Chopin and 60 percent Beethoven:
+
+```python
+composer_mix={
+    "Frédéric Chopin": 40,
+    "Franz Schubert": 0,
+    "Ludwig van Beethoven": 60,
+    "Johann Sebastian Bach": 0,
+    "Franz Liszt": 0,
+    "OTHER": 0,
+}
+```
+
+The values are normalized automatically, but using a total of 100 makes the mixture easier to understand.
+
+The other generation settings can also be changed:
+
+```text
+output_name     Name used for the generated files
+max_bars        Maximum number of musical bars
+max_new_tokens  Maximum number of generated tokens
+temperature     Randomness of generation
+top_k           Number of candidate tokens considered at each step
+bpm             Tempo of the generated MIDI
+seed            Random seed used for generation
+```
+
+### 8. Generate music
+
+Make sure the virtual environment is active:
+
+```bash
+source .venv/bin/activate
+```
+
+Run the generator from the repository root:
+
+```bash
+python src/music_generator.py
+```
+
+The model may take some time to generate music, especially when running on the CPU.
+
+The generated files are saved in the `generated` directory:
+
+```text
+generated/
+├── bach40_liszt60.mid
+├── bach40_liszt60.wav
+└── bach40_liszt60_tokens.npy
+```
+
+The MIDI file can be opened in GarageBand, Logic Pro, MuseScore, or another MIDI-compatible application. The WAV file can be played using a standard audio player.
+
+### Generate MIDI without WAV rendering
+
+If FluidSynth or a SoundFont is not available, add the following argument to `generator.generate`:
+
+```python
+render_wav=False
+```
+
+For example:
+
+```python
+generator.generate(
+    composer_mix={
+        "Frédéric Chopin": 40,
+        "Franz Schubert": 0,
+        "Ludwig van Beethoven": 60,
+        "Johann Sebastian Bach": 0,
+        "Franz Liszt": 0,
+        "OTHER": 0,
+    },
+    output_name="chopin40_beethoven60",
+    max_bars=16,
+    max_new_tokens=3500,
+    temperature=0.90,
+    top_k=24,
+    bpm=120,
+    seed=1234,
+    render_wav=False,
+)
+```
+
+This creates the MIDI and token files without creating a WAV file.
+
+### Troubleshooting
+
+If the following error appears:
+
+```text
+ModuleNotFoundError: No module named 'torch'
+```
+
+activate the virtual environment and install PyTorch using the same Python interpreter:
+
+```bash
+source .venv/bin/activate
+python -m pip install torch
+python src/music_generator.py
+```
+
+Confirm that the correct Python installation is being used:
+
+```bash
+which python
+python -c "import torch; print(torch.__version__)"
+```
+
+If FluidSynth is not found, run:
+
+```bash
+brew install fluid-synth
+which fluidsynth
+```
+
+If the checkpoint is not found, confirm that it is located at:
+
+```text
+models/best_structured_v3_piano_transformer_augmented.pt
+```
+
+If the SoundFont is not found, confirm that it is located at:
+
+```text
+soundfonts/MuseScore_General.sf3
+```
 
 ## AI Assistance
 
