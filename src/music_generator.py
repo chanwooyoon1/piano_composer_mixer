@@ -113,8 +113,6 @@ def tokens_to_midi_v3(tokens, bpm=120):
             pending_pitch = None
 
         elif CHORD_START <= token < POSITION_START:
-            # コードトークンは構造条件として使用する。
-            # MIDIノートには直接変換しない。
             pass
 
         # Update the current position inside the bar.
@@ -367,7 +365,6 @@ def sample_token(logits, top_k):
         dim=-1,
     )
 
-    # CPU側で選択するとMPSでも安定して動く
     sampled_position = torch.multinomial(
         probabilities.cpu(),
         num_samples=1,
