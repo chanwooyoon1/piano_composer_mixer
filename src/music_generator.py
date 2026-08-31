@@ -93,7 +93,6 @@ def tokens_to_midi_v3(tokens, bpm=120):
         name="Acoustic Grand Piano",
     )
 
-    # 16分音符単位
     seconds_per_step = 60.0 / bpm / 4.0
 
     # Track the current musical location and note attributes.
